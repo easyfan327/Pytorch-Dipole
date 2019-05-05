@@ -23,7 +23,7 @@ def init_params(params: dict):
     params["rnn_hidden_size"] = 128
     params["is_rnn_bidirectional"] = True
 
-    params["attention_type"] = "concat"
+    params["attention_type"] = "location"
     # "concat"
     # "general"
     # "location"
