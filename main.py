@@ -23,7 +23,7 @@ def init_params(params: dict):
     params["rnn_hidden_size"] = 128
     params["is_rnn_bidirectional"] = True
 
-    params["attention_type"] = "location"
+    params["attention_type"] = "concat"
     # "concat"
     # "general"
     # "location"
@@ -71,7 +71,7 @@ class DipoleRNN(nn.Module):
             self.attn_type = "concat"
             pass
 
-        self.hidden_tilde_layer = nn.Linear(in_features=params["rnn_hidden_size"] * 2,
+        self.hidden_tilde_layer = nn.Linear(in_features=params["rnn_hidden_size"] * 4,
                                             out_features=params["r"],
                                             bias=False)
         self.output_layer = nn.Linear(in_features=params["r"],
@@ -108,11 +108,11 @@ class DipoleRNN(nn.Module):
             alpha = self.attn_layer(h_i)
             alpha = self.attn_layer_post(alpha)
         elif self.attn_type == "general":
-            h_t = h_i.unsqueeze(0).repeat(h_i.shape[0], 1, 1)
+            h_t = h_i[-1].repeat(h_i.shape[0], 1, 1)
             alpha = self.attn_layer(h_t, h_i)
         elif self.attn_type == "concat":
-            h_t = h_i.unsqueeze(0).repeat(h_i.shape[0], 1, 1)
-            h_c = torch.cat(h_i, h_t)
+            h_t = h_i[-1].repeat(h_i.shape[0], 1, 1)
+            h_c = torch.cat((h_i, h_t), dim=-1)
             h_c = torch.tanh(self.attn_layer(h_c))
             alpha = self.attn_layer_post(h_c)
         else:
@@ -120,22 +120,24 @@ class DipoleRNN(nn.Module):
 
         logging.debug("h_i:" + str(h_i.shape))
         logging.debug("alpha:" + str(alpha.shape))
-        c = alpha * h_i
+        c = torch.sum(alpha * h_i, dim=0)
         logging.debug("c:" + str(c.shape))
 
         # features is on the last dimension
-        h_concat = torch.cat((c, h_i), dim=-1)
+        h_t = h_i[-1]
+        logging.debug("h_t:" + str(h_t.shape))
+        h_concat = torch.cat((c, h_t), dim=-1)
         logging.debug("h_concat:" + str(h_concat.shape))
 
         h_tilde = self.hidden_tilde_layer(h_concat)
-        logging.debug("h_tilde:" + str(h_concat.shape))
+        logging.debug("h_tilde:" + str(h_tilde.shape))
 
         output = self.output_layer(h_tilde)
         logging.debug("output:" + str(output.shape))
-        output = F.softmax(output, dim=0)
+        output = F.softmax(output, dim=-1)
         logging.debug("output:" + str(output.shape))
 
-        return output
+        return output, hidden
 
     def init_hidden(self, current_batch_size):
         if self.param_dict["is_rnn_bidirectional"]:
@@ -202,7 +204,7 @@ def init_data(params: dict):
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.DEBUG)
+    logging.basicConfig(level=logging.WARNING)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     # print(device)
 
@@ -214,7 +216,7 @@ if __name__ == "__main__":
     model = DipoleRNN(params=parameters).to(device)
     # for name, parm in model.named_parameters():
     #   print(name, parm)
-    optimizer = torch.optim.Adadelta(model.parameters(), lr=1.0, rho=0.9, eps=1e-6, weight_decay=0.001)
+    optimizer = torch.optim.Adadelta(model.parameters(), lr=0.1, rho=0.9, eps=1e-6, weight_decay=0.001)
     loss_fn = torch.nn.CrossEntropyLoss()
 
     n_batches = int(np.ceil(float(len(train_set_y)) / float(parameters["batch_size"])))
@@ -235,11 +237,8 @@ if __name__ == "__main__":
 
             pred, rnn_hidden_init = model(xbpadtensor, rnn_hidden_init)
             pred = pred.squeeze(1)
-            # print("pred:")
-            # print(pred.shape)
-            # print(pred.data)
-            # print("ybtensor:")
-            # print(ybtensor.shape)
+            logging.debug("pred:" + str(pred.shape))
+            logging.debug("ybtensor:" + str(ybtensor.shape))
 
             loss = loss_fn(pred, ybtensor)
             loss.backward()
